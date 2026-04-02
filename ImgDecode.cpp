@@ -53,13 +53,13 @@ namespace ImageDecode
 	constexpr int BitsPerCell = 3;
 
 	const std::array<DataArea, DataAreaCount> kDataAreas =
-	{ {
+	{{
 		{3, TopDataLeft, 3, TopDataWidth, 0},
 		{6, 21, 15, 91, 0},
 		{21, 3, 88, 127, 0},
 		{109, 3, 3, 127, 0},
 		{112, 21, 18, 91, 0}
-	} };
+	}};
 
 	bool isWhiteCell(const Vec3b& cell)
 	{
