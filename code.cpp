@@ -22,7 +22,7 @@
 
 namespace Code
 {
-	constexpr int BytesPerFrame = 5634;
+	constexpr int BytesPerFrame = 5631;
 	constexpr int BitsPerCell = 3;
 	constexpr int FrameSize = 133;
 	constexpr int FrameOutputRate = 10;
@@ -42,7 +42,7 @@ namespace Code
 	constexpr int HeaderInnerLeft = 0;
 	constexpr int TopDataLeft = HeaderLeft + HeaderWidth;
 	constexpr int TopDataWidth = 75;
-	constexpr int DataAreaCount = 5;
+	constexpr int DataAreaCount = 6; 
 	constexpr int PaddingCellCount = 4;
 
 	struct DataArea
@@ -102,23 +102,27 @@ namespace Code
 		Vec3b(255, 255, 255)
 	};
 
+
 	const std::array<DataArea, DataAreaCount> kDataAreas =
 	{ {
 		{3, TopDataLeft, 3, TopDataWidth, 0},
-		{6, 21, 15, 91, 0},
+		{6, 29, 1, 83, 0},       
+		{7, 21, 14, 91, 0},      
 		{21, 3, 88, 127, 0},
 		{109, 3, 3, 127, 0},
 		{112, 21, 18, 91, 0}
 	} };
 
-	const std::array<DebugRegion, 10> kDebugRegions =
+	const std::array<DebugRegion, 12> kDebugRegions =
 	{ {
 		{"header", HeaderTop, HeaderLeft, HeaderHeight, HeaderWidth, Vec3b(0, 0, 255)},
+		{"palette", 6, 21, 1, 8, Vec3b(255, 255, 255)},
 		{"data1", kDataAreas[0].top, kDataAreas[0].left, kDataAreas[0].height, kDataAreas[0].width, Vec3b(255, 0, 0)},
-		{"data1_lower", kDataAreas[1].top, kDataAreas[1].left, kDataAreas[1].height, kDataAreas[1].width, Vec3b(255, 0, 0)},
-		{"data2", kDataAreas[2].top, kDataAreas[2].left, kDataAreas[2].height, kDataAreas[2].width, Vec3b(0, 255, 0)},
-		{"data4", kDataAreas[3].top, kDataAreas[3].left, kDataAreas[3].height, kDataAreas[3].width, Vec3b(0, 255, 255)},
-		{"data3", kDataAreas[4].top, kDataAreas[4].left, kDataAreas[4].height, kDataAreas[4].width, Vec3b(255, 255, 0)},
+		{"data1_lower_a", kDataAreas[1].top, kDataAreas[1].left, kDataAreas[1].height, kDataAreas[1].width, Vec3b(255, 0, 0)},
+		{"data1_lower_b", kDataAreas[2].top, kDataAreas[2].left, kDataAreas[2].height, kDataAreas[2].width, Vec3b(255, 0, 0)},
+		{"data2", kDataAreas[3].top, kDataAreas[3].left, kDataAreas[3].height, kDataAreas[3].width, Vec3b(0, 255, 0)},
+		{"data4", kDataAreas[4].top, kDataAreas[4].left, kDataAreas[4].height, kDataAreas[4].width, Vec3b(0, 255, 255)},
+		{"data3", kDataAreas[5].top, kDataAreas[5].left, kDataAreas[5].height, kDataAreas[5].width, Vec3b(255, 255, 0)},
 		{"corner_data_v", 112, 112, 18, 9, Vec3b(0, 200, 255)},
 		{"corner_data_h", 112, 121, 9, 9, Vec3b(0, 200, 255)},
 		{"corner", FrameSize - CornerReserveSize, FrameSize - CornerReserveSize, CornerReserveSize, CornerReserveSize, Vec3b(255, 0, 255)},
@@ -501,6 +505,10 @@ namespace Code
 		BulidSafeArea(codeMat);
 		BulidQrPoint(codeMat);
 		fillDataNoise(codeMat);
+
+		for (int i = 0; i < 8; ++i) {
+			codeMat.at<Vec3b>(6, 21 + i) = dataPixel[i];
+		}
 
 		const int checkCode = CalCheckCode(reinterpret_cast<const unsigned char*>(info), tailLen,
 			frameType == FrameType::Start || frameType == FrameType::StartAndEnd,

@@ -8,29 +8,102 @@ namespace ImgParse {
     using namespace std;
     using namespace cv;
 
-    // 静态全局缓存：保存上一次成功解析的透视变换矩阵
-    // 用于应对单帧极度模糊时的时空追踪兜底
+    // 静态全局缓存矩阵和最新的调色板
     //
     static Mat lastValidTransform;
+    static double lastValidS = 1.0;
+    static Vec3b currentPalette[8];
 
     struct Marker {
         Point2f center;
         double area;
     };
 
-    // 统计局部区域黑色像素的面积，用于 V5 兜底判断方向
-    // 降维打击：在拉平的正方形中，四角到中心的距方 (dist^2) 恒等
-    // 因此比较面积等价于比较 area / dist^2，完美继承 warp_engine 核心思想
+    // 数据区判定
     //
-    int getBlackArea(const Mat& corner) {
-        Mat binCorner;
-        threshold(corner, binCorner, 0, 255, THRESH_BINARY | THRESH_OTSU);
-        return (corner.rows * corner.cols) - countNonZero(binCorner);
+    bool isDataCell(int r, int c) {
+        if (r >= 3 && r < 6 && c >= 37 && c < 112) return true;
+        if (r == 6 && c >= 29 && c < 112) return true;
+        if (r >= 7 && r < 21 && c >= 21 && c < 112) return true;
+        if (r >= 21 && r < 109 && c >= 3 && c < 130) return true;
+        if (r >= 109 && r < 112 && c >= 3 && c < 130) return true;
+        if (r >= 112 && r < 130 && c >= 21 && c < 112) return true;
+
+        if (r >= 112 && r < 130 && c >= 112 && c < 130) {
+            if (abs(r - 126) <= 5 && abs(c - 126) <= 5) return false;
+            return true;
+        }
+        return false;
     }
 
-    // V15 最稳健的三层嵌套轮廓寻找器
-    // 极度严苛的层级校验，杜绝几乎所有背景干扰
+    // 提取并记住调色板
     //
+    void extractPalette(const Mat& croppedImg) {
+        if (croppedImg.empty()) return;
+        double S = croppedImg.cols / 133.0;
+        for (int i = 0; i < 8; ++i) {
+            int cx = cvRound((21.0 + i) * S);
+            int cy = cvRound(6.0 * S);
+            if (cx >= 0 && cx < croppedImg.cols && cy >= 0 && cy < croppedImg.rows) {
+                currentPalette[i] = croppedImg.at<Vec3b>(cy, cx);
+            }
+        }
+    }
+
+    // 绘制调试标识
+    //
+    void drawDebug(Mat& img, double S) {
+        Point2f tl(10.0 * S, 10.0 * S);
+        Point2f tr(122.0 * S, 10.0 * S);
+        Point2f bl(10.0 * S, 122.0 * S);
+        int r = cvRound(3.5 * S);
+
+        circle(img, tl, r, Scalar(0, 0, 255), 2);
+        circle(img, tr, r, Scalar(0, 0, 255), 2);
+        circle(img, bl, r, Scalar(0, 0, 255), 2);
+
+        for (int i = 0; i < 8; ++i) {
+            Point2f pc((21.0 + i) * S, 6.0 * S);
+            int half = cvRound(0.5 * S);
+            rectangle(img, Point2f(pc.x - half, pc.y - half), Point2f(pc.x + half, pc.y + half), Scalar(255, 0, 0), 2.5);
+            circle(img, pc, 2, Scalar(0, 255, 0), -1);
+        }
+    }
+
+    // 绘制数据区网格
+    //
+    void drawGrid(Mat& img, double S) {
+        for (int r = 0; r < 133; ++r) {
+            for (int c = 0; c < 133; ++c) {
+                if (isDataCell(r, c)) {
+                    int x1 = cvRound(c * S);
+                    int y1 = cvRound(r * S);
+                    int x2 = cvRound((c + 1) * S);
+                    int y2 = cvRound((r + 1) * S);
+                    rectangle(img, Point(x1, y1), Point(x2, y2), Scalar(200, 200, 200), 1);
+                }
+            }
+        }
+    }
+
+    // 缩放控制
+    //
+    void resizeToTarget(Mat& img) {
+        int L = img.cols;
+        int targetSize = 266;
+        if (L >= 1330) {
+            targetSize = 1330;
+        }
+        else if (L >= 532) {
+            targetSize = 532;
+        }
+        resize(img, img, Size(targetSize, targetSize), 0, 0, INTER_NEAREST);
+    }
+
+    int getBlackArea(const Mat& corner) {
+        return (corner.rows * corner.cols) - countNonZero(corner);
+    }
+
     int findLargestChild(int parentIdx, const vector<vector<Point>>& contours, const vector<Vec4i>& hierarchy) {
         int max_idx = -1;
         double max_area = -1.0;
@@ -46,23 +119,17 @@ namespace ImgParse {
         return max_idx;
     }
 
-    // ==========================================
-    // V5 强化版：专治前 3 帧的录屏撕裂与极度模糊
-    // ==========================================
+    // 处理V5
     //
     bool processV5(const Mat& srcImg, Mat& disImg) {
         Mat gray, small_img;
 
-        // 借鉴 warp_engine 的色相分离掩膜操作，剔除背景干扰
-        //
         if (srcImg.channels() == 3) {
             Mat hsv, satMask;
             cvtColor(srcImg, hsv, COLOR_BGR2HSV);
             vector<Mat> hsv_ch;
             split(hsv, hsv_ch);
 
-            // 高饱和度区域绝对是背景杂物，直接提取并抹黑
-            //
             threshold(hsv_ch[1], satMask, 100, 255, THRESH_BINARY);
             cvtColor(srcImg, gray, COLOR_BGR2GRAY);
             gray.setTo(0, satMask);
@@ -75,21 +142,14 @@ namespace ImgParse {
         if (scale > 1.0f) scale = 1.0f;
         resize(gray, small_img, Size(), scale, scale, INTER_AREA);
 
-        // 局部自适应，代替脆弱的大津法，抵抗反光
-        //
         Mat binaryForOuter;
         adaptiveThreshold(small_img, binaryForOuter, 255, ADAPTIVE_THRESH_GAUSSIAN_C, THRESH_BINARY, 101, 0);
 
-        // 使用 5x5 交叉核，足以缝合断裂的 SafeArea 边框且保留完美的四个锐角
-        //
         Mat kernelOuter = getStructuringElement(MORPH_CROSS, Size(5, 5));
         Mat closedForOuter;
         morphologyEx(binaryForOuter, closedForOuter, MORPH_CLOSE, kernelOuter);
 
         vector<vector<Point>> outerContours;
-
-        // RETR_EXTERNAL 完美无视内部撕裂的花纹，只抓取最外层白框
-        //
         findContours(closedForOuter, outerContours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
         if (outerContours.empty()) return false;
 
@@ -101,8 +161,6 @@ namespace ImgParse {
         }
         if (max_area < 2000) return false;
 
-        // 先取凸包抹平内凹噪点，确保百分百拟合出四边形
-        //
         vector<Point> hull;
         convexHull(outerContours[max_idx], hull);
 
@@ -132,32 +190,27 @@ namespace ImgParse {
             return atan2(a.y - centerOuter.y, a.x - centerOuter.x) < atan2(b.y - centerOuter.y, b.x - centerOuter.x);
             });
 
-        // 拉平到 798x798 高清平面，放大面积差异
-        //
         vector<Point2f> dstPointsOuter = {
-            Point2f(0.0f, 0.0f), Point2f(798.0f, 0.0f),
-            Point2f(798.0f, 798.0f), Point2f(0.0f, 798.0f)
+            Point2f(0.0f, 0.0f), Point2f(532.0f, 0.0f),
+            Point2f(532.0f, 532.0f), Point2f(0.0f, 532.0f)
         };
 
         Mat M_Outer = getPerspectiveTransform(srcPointsOuter, dstPointsOuter);
-        Mat warped798;
-        warpPerspective(gray, warped798, M_Outer, Size(798, 798), INTER_LINEAR);
+        Mat warped532;
+        warpPerspective(gray, warped532, M_Outer, Size(532, 532), INTER_LINEAR);
 
-        Mat binWarped;
-        threshold(warped798, binWarped, 0, 255, THRESH_BINARY | THRESH_OTSU);
+        Mat binWarped532;
+        threshold(warped532, binWarped532, 0, 255, THRESH_BINARY | THRESH_OTSU);
 
-        // 宏观统计四角黑面积，精准制导旋转方向
-        // 798 体系下，定位块占据 126x126 的空间
-        //
-        int cornerSize = 126;
+        int cornerSize = 84;
         Rect tl(0, 0, cornerSize, cornerSize);
-        Rect tr(798 - cornerSize, 0, cornerSize, cornerSize);
-        Rect br(798 - cornerSize, 798 - cornerSize, cornerSize, cornerSize);
-        Rect bl(0, 798 - cornerSize, cornerSize, cornerSize);
+        Rect tr(532 - cornerSize, 0, cornerSize, cornerSize);
+        Rect br(532 - cornerSize, 532 - cornerSize, cornerSize, cornerSize);
+        Rect bl(0, 532 - cornerSize, cornerSize, cornerSize);
 
         int areas[4] = {
-            getBlackArea(binWarped(tl)), getBlackArea(binWarped(tr)),
-            getBlackArea(binWarped(br)), getBlackArea(binWarped(bl))
+            getBlackArea(binWarped532(tl)), getBlackArea(binWarped532(tr)),
+            getBlackArea(binWarped532(br)), getBlackArea(binWarped532(bl))
         };
 
         int minArea = areas[0];
@@ -169,49 +222,54 @@ namespace ImgParse {
             }
         }
 
-        // 记录并生成最终供全局兜底使用的矩阵 (133 缩放系)
-        // 根据旋转方向，将源顶点映射到正确的 133x133 目标角
-        //
-        vector<Point2f> finalDst133;
-        if (smallQrIdx == 0)      finalDst133 = { Point2f(133.0f,133.0f), Point2f(0.0f,133.0f), Point2f(0.0f,0.0f), Point2f(133.0f,0.0f) };
-        else if (smallQrIdx == 1) finalDst133 = { Point2f(133.0f,0.0f), Point2f(133.0f,133.0f), Point2f(0.0f,133.0f), Point2f(0.0f,0.0f) };
-        else if (smallQrIdx == 3) finalDst133 = { Point2f(0.0f,133.0f), Point2f(0.0f,0.0f), Point2f(133.0f,0.0f), Point2f(133.0f,133.0f) };
-        else                      finalDst133 = { Point2f(0.0f,0.0f), Point2f(133.0f,0.0f), Point2f(133.0f,133.0f), Point2f(0.0f,133.0f) };
+        double len1 = norm(srcPointsOuter[1] - srcPointsOuter[0]);
+        double len2 = norm(srcPointsOuter[3] - srcPointsOuter[0]);
+        double S = std::max(len1, len2) / 133.0;
+        int L = cvRound(133.0 * S);
 
-        // 更新全局矩阵缓存
-        //
-        lastValidTransform = getPerspectiveTransform(srcPointsOuter, finalDst133);
+        vector<Point2f> finalDst;
+        if (smallQrIdx == 0)      finalDst = { Point2f(L,L), Point2f(0.0f,L), Point2f(0.0f,0.0f), Point2f(L,0.0f) };
+        else if (smallQrIdx == 1) finalDst = { Point2f(L,0.0f), Point2f(L,L), Point2f(0.0f,L), Point2f(0.0f,0.0f) };
+        else if (smallQrIdx == 3) finalDst = { Point2f(0.0f,L), Point2f(0.0f,0.0f), Point2f(L,0.0f), Point2f(L,L) };
+        else                      finalDst = { Point2f(0.0f,0.0f), Point2f(L,0.0f), Point2f(L,L), Point2f(0.0f,L) };
 
-        warpPerspective(srcImg, disImg, lastValidTransform, Size(133, 133), INTER_LINEAR);
+        lastValidTransform = getPerspectiveTransform(srcPointsOuter, finalDst);
+        lastValidS = S;
+
+        warpPerspective(srcImg, disImg, lastValidTransform, Size(L, L), INTER_LINEAR);
+
+        extractPalette(disImg);
+        resizeToTarget(disImg);
+
+        double finalS = disImg.cols / 133.0;
+        drawDebug(disImg, finalS);
+        drawGrid(disImg, finalS);
+
         return true;
     }
 
-    // ==========================================
-    // V15 原汁原味高精度内部特征提取逻辑 
-    // ==========================================
+    // 处理V15
     //
     bool processV15(const Mat& srcImg, Mat& gray, Mat& disImg, bool useHSV) {
-        Mat blurred, binaryForContours;
+        Mat small_img, blurred, binaryForContours;
 
-        // HSV 滤镜：提取饱和度，干掉录屏光斑与彩色背景噪点
-        //
         if (useHSV && srcImg.channels() == 3) {
             Mat hsv, binaryMask;
             cvtColor(srcImg, hsv, COLOR_BGR2HSV);
             vector<Mat> hsv_ch;
             split(hsv, hsv_ch);
 
-            // 提取饱和度大于 180 的区域，全部抹白
-            //
             threshold(hsv_ch[1], binaryMask, 180, 255, THRESH_BINARY);
             gray.setTo(255, binaryMask);
         }
 
-        GaussianBlur(gray, blurred, Size(5, 5), 0);
+        float scale = 1920.0f / std::max(srcImg.cols, srcImg.rows);
+        if (scale > 1.0f) scale = 1.0f;
+        resize(gray, small_img, Size(), scale, scale, INTER_AREA);
+
+        GaussianBlur(small_img, blurred, Size(5, 5), 0);
         adaptiveThreshold(blurred, binaryForContours, 255, ADAPTIVE_THRESH_GAUSSIAN_C, THRESH_BINARY_INV, 31, 10);
 
-        // L 型微切片形态学手术刀，专切摩尔纹
-        //
         Mat kernel = getStructuringElement(MORPH_CROSS, Size(2, 2));
         Mat closedBinary;
         morphologyEx(binaryForContours, closedBinary, MORPH_CLOSE, kernel);
@@ -232,7 +290,7 @@ namespace ImgParse {
             double area1 = contourArea(contours[c1]);
             double area2 = contourArea(contours[c2]);
 
-            if (area0 < 15) continue;
+            if (area0 < 15.0 * scale * scale) continue;
 
             double r01 = area0 / max(area1, 1.0);
             double r12 = area1 / max(area2, 1.0);
@@ -240,13 +298,14 @@ namespace ImgParse {
             if (r01 > 1.2 && r01 < 8.0 && r12 > 1.2 && r12 < 8.0) {
                 Moments M = moments(contours[i]);
                 if (M.m00 != 0) {
-                    markers.push_back({ Point2f(M.m10 / M.m00, M.m01 / M.m00), area0 });
+                    markers.push_back({
+                        Point2f((M.m10 / M.m00) / scale, (M.m01 / M.m00) / scale),
+                        area0 / (scale * scale)
+                        });
                 }
             }
         }
 
-        // 空间去重合并
-        //
         vector<Marker> uniqueMarkers;
         for (const auto& m : markers) {
             bool duplicate = false;
@@ -266,15 +325,10 @@ namespace ImgParse {
 
         if (markers.size() < 3) return false;
 
-        // 核心修复：严格按面积降序排列！
-        // 保证提取出来的前 3 个必定是三大主定位块，无视中间乱入的小噪点。
-        //
         std::sort(markers.begin(), markers.end(), [](const Marker& a, const Marker& b) {
             return a.area > b.area;
             });
 
-        // 强制使用前三个面积最大的点寻找直角 (即 TL)
-        //
         double maxDist = 0;
         int rightAngleIdx = -1;
         for (int i = 0; i < 3; ++i) {
@@ -291,22 +345,16 @@ namespace ImgParse {
         Point2f pt1 = markers[(rightAngleIdx + 1) % 3].center;
         Point2f pt2 = markers[(rightAngleIdx + 2) % 3].center;
 
-        // 终极几何锁：针对三个主定位块进行自然法则约束，错位则放弃该帧
-        //
         Point2f v1 = pt1 - TL;
         Point2f v2 = pt2 - TL;
         double len1 = norm(v1);
         double len2 = norm(v2);
 
-        // 边长比例锁：允许一定透视，但直角边长比例绝不应超过 1.6 倍
-        //
         double legRatio = len1 / max(len2, 1.0);
-        if (legRatio < 0.6 || legRatio > 1.6) return false;
+        if (legRatio < 0.4 || legRatio > 2.5) return false;
 
-        // 夹角锁：利用点乘判定必须大致是直角，余弦绝对值大于 0.5 意味着发生严重共线噪点
-        //
         double cosTheta = (v1.x * v2.x + v1.y * v2.y) / max(len1 * len2, 1.0);
-        if (std::abs(cosTheta) > 0.5) return false;
+        if (std::abs(cosTheta) > 0.75) return false;
 
         double cross = v1.x * v2.y - v1.y * v2.x;
         Point2f TR, BL;
@@ -317,8 +365,6 @@ namespace ImgParse {
         bool foundBR = false;
         Point2f expectedBR = TR + BL - TL;
 
-        // 从剩下的其他标记中，寻找最靠近推导出来的右下角的点
-        //
         if (markers.size() > 3) {
             double minDist = 1e9;
             int bestIdx = -1;
@@ -329,38 +375,45 @@ namespace ImgParse {
                     bestIdx = i;
                 }
             }
-            // 若该点距离误差在边长的 40% 内，说明是真实的 SmallQrPoint
-            //
-            if (minDist < max(len1, len2) * 0.4) {
+            if (minDist < max(len1, len2) * 0.5) {
                 BR = markers[bestIdx].center;
                 foundBR = true;
             }
         }
         if (!foundBR) BR = expectedBR;
 
+        double S = std::max(len1, len2) / 112.0;
+        int L = cvRound(133.0 * S);
+
         vector<Point2f> srcPoints = { TL, TR, BR, BL };
         vector<Point2f> dstPoints = {
-            Point2f(10.0f, 10.0f),
-            Point2f(122.0f, 10.0f),
-            foundBR ? Point2f(126.0f, 126.0f) : Point2f(122.0f, 122.0f),
-            Point2f(10.0f, 122.0f)
+            Point2f(10.0f * S, 10.0f * S),
+            Point2f(122.0f * S, 10.0f * S),
+            foundBR ? Point2f(126.0f * S, 126.0f * S) : Point2f(122.0f * S, 122.0f * S),
+            Point2f(10.0f * S, 122.0f * S)
         };
 
         Mat transformMatrix = getPerspectiveTransform(srcPoints, dstPoints);
-
-        // 更新全局缓存，用于后续帧如果崩溃时兜底
-        //
         lastValidTransform = transformMatrix.clone();
+        lastValidS = S;
 
-        warpPerspective(srcImg, disImg, transformMatrix, Size(133, 133), INTER_LINEAR);
+        warpPerspective(srcImg, disImg, transformMatrix, Size(L, L), INTER_LINEAR);
+
+        extractPalette(disImg);
+        resizeToTarget(disImg);
+
+        double finalS = disImg.cols / 133.0;
+        drawDebug(disImg, finalS);
+        drawGrid(disImg, finalS);
+
         return true;
     }
 
+    // 主函数入口
+    //
     bool Main(const cv::Mat& srcImg, cv::Mat& disImg) {
         if (srcImg.empty()) return false;
 
-        // 视频分辨率锁：防止连续处理多个不同视频时缓存污染
-        //
         static int last_cols = 0;
         static int last_rows = 0;
         static int v5_frame_count = 0;
@@ -372,32 +425,19 @@ namespace ImgParse {
             lastValidTransform = Mat();
         }
 
-        // 拦截无形变的原始纯净视频导出帧
-        //
         double aspect = (double)srcImg.cols / srcImg.rows;
         if (aspect > 0.95 && aspect < 1.05 && srcImg.cols > 266) {
-            disImg.create(133, 133, CV_8UC3);
-            float stepX = (float)srcImg.cols / 133.0f;
-            float stepY = (float)srcImg.rows / 133.0f;
+            disImg = srcImg.clone();
 
-            for (int r = 0; r < 133; ++r) {
-                for (int c = 0; c < 133; ++c) {
-                    int px = std::min(static_cast<int>((c + 0.5f) * stepX), srcImg.cols - 1);
-                    int py = std::min(static_cast<int>((r + 0.5f) * stepY), srcImg.rows - 1);
-                    if (srcImg.channels() == 3) {
-                        disImg.at<Vec3b>(r, c) = srcImg.at<Vec3b>(py, px);
-                    }
-                    else {
-                        uint8_t val = srcImg.at<uint8_t>(py, px);
-                        disImg.at<Vec3b>(r, c) = Vec3b(val, val, val);
-                    }
-                }
-            }
+            extractPalette(disImg);
+            resizeToTarget(disImg);
+
+            double finalS = disImg.cols / 133.0;
+            drawDebug(disImg, finalS);
+            drawGrid(disImg, finalS);
             return true;
         }
 
-        // 处理前 3 帧：最容易因为曝光撕裂产生激光，必须用 V5 暴力外框提取兜底
-        //
         if (v5_frame_count < 3) {
             v5_frame_count++;
             if (processV5(srcImg, disImg)) {
@@ -409,14 +449,10 @@ namespace ImgParse {
         if (srcImg.channels() == 3) cvtColor(srcImg, grayNormal, COLOR_BGR2GRAY);
         else grayNormal = srcImg.clone();
 
-        // 常规帧：视频稳定后，使用最精细的 V15 逻辑提取，绝杀定位点
-        //
         if (processV15(srcImg, grayNormal, disImg, false)) {
             return true;
         }
 
-        // 极端环境兜底：启动 HSV 色彩降维打击，过滤彩色背景和光斑后再重试 V15
-        //
         if (srcImg.channels() == 3) {
             Mat grayHSV = grayNormal.clone();
             if (processV15(srcImg, grayHSV, disImg, true)) {
@@ -424,15 +460,16 @@ namespace ImgParse {
             }
         }
 
-        // ==========================================
-        // 最终形态：时空一致性追踪兜底 (Temporal Tracking Fallback)
-        // 如果所有特征提取均宣告失败，直接借用上一帧成功的透视矩阵！
-        // ==========================================
-        //
         if (!lastValidTransform.empty()) {
-            // 直接使用上一次成功的矩阵对当前原图进行提取
-            //
-            warpPerspective(srcImg, disImg, lastValidTransform, Size(133, 133), INTER_LINEAR);
+            int L = cvRound(133.0 * lastValidS);
+            warpPerspective(srcImg, disImg, lastValidTransform, Size(L, L), INTER_LINEAR);
+
+            extractPalette(disImg);
+            resizeToTarget(disImg);
+
+            double finalS = disImg.cols / 133.0;
+            drawDebug(disImg, finalS);
+            drawGrid(disImg, finalS);
             return true;
         }
 
