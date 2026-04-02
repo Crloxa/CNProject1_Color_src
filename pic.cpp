@@ -9,22 +9,35 @@ namespace ImgParse {
     using namespace cv;
 
     static Mat lastValidTransform;
-    static double lastValidS = 1.0;
+    static int lastValidL = 133;
+    static int lastValidTargetSize = 266;
     static Vec3b currentPalette[8];
+
+    const Vec3b stdColors[8] = {
+        Vec3b(0, 0, 0),
+        Vec3b(0, 0, 255),
+        Vec3b(0, 255, 0),
+        Vec3b(0, 255, 255),
+        Vec3b(255, 0, 0),
+        Vec3b(255, 0, 255),
+        Vec3b(255, 255, 0),
+        Vec3b(255, 255, 255)
+    };
 
     struct Marker {
         Point2f center;
         double area;
     };
 
-    bool isDataCell(int r, int c) {
+    bool isDataOrHeaderCell(int r, int c) {
+        if (r >= 3 && r < 6 && c >= 21 && c < 37) return true;
+        if (r == 6 && c >= 21 && c < 29) return true;
         if (r >= 3 && r < 6 && c >= 37 && c < 112) return true;
         if (r == 6 && c >= 29 && c < 112) return true;
         if (r >= 7 && r < 21 && c >= 21 && c < 112) return true;
         if (r >= 21 && r < 109 && c >= 3 && c < 130) return true;
         if (r >= 109 && r < 112 && c >= 3 && c < 130) return true;
         if (r >= 112 && r < 130 && c >= 21 && c < 112) return true;
-
         if (r >= 112 && r < 130 && c >= 112 && c < 130) {
             if (abs(r - 126) <= 5 && abs(c - 126) <= 5) return false;
             return true;
@@ -32,64 +45,80 @@ namespace ImgParse {
         return false;
     }
 
-    void extractPalette(const Mat& croppedImg) {
-        if (croppedImg.empty()) return;
-        double S = croppedImg.cols / 133.0;
+    void extractPalette(const Mat& img) {
+        if (img.empty()) return;
+        double k = img.cols / 133.0;
         for (int i = 0; i < 8; ++i) {
-            int cx = cvRound((21.0 + i) * S);
-            int cy = cvRound(6.0 * S);
-            if (cx >= 0 && cx < croppedImg.cols && cy >= 0 && cy < croppedImg.rows) {
-                currentPalette[i] = croppedImg.at<Vec3b>(cy, cx);
+            int cx = cvRound((21.5 + i) * k);
+            int cy = cvRound(6.5 * k);
+            if (cx >= 0 && cx < img.cols && cy >= 0 && cy < img.rows) {
+                currentPalette[i] = img.at<Vec3b>(cy, cx);
             }
         }
     }
 
-    void drawDebug(Mat& img, double S) {
-        Point2f tl(10.0 * S, 10.0 * S);
-        Point2f tr(122.0 * S, 10.0 * S);
-        Point2f bl(10.0 * S, 122.0 * S);
-        int r = cvRound(3.5 * S);
-
-        circle(img, tl, r, Scalar(0, 0, 255), 2);
-        circle(img, tr, r, Scalar(0, 0, 255), 2);
-        circle(img, bl, r, Scalar(0, 0, 255), 2);
-
+    int getClosestPaletteIndex(Vec3b px) {
+        int bestIdx = 0;
+        int minDist = 1e9;
         for (int i = 0; i < 8; ++i) {
-            Point2f pc((21.0 + i) * S, 6.0 * S);
-            int half = cvRound(0.5 * S);
-            rectangle(img, Point2f(pc.x - half, pc.y - half), Point2f(pc.x + half, pc.y + half), Scalar(255, 0, 0), 2.5);
-            circle(img, pc, 2, Scalar(0, 255, 0), -1);
+            int db = px[0] - currentPalette[i][0];
+            int dg = px[1] - currentPalette[i][1];
+            int dr = px[2] - currentPalette[i][2];
+            int dist = db * db + dg * dg + dr * dr;
+            if (dist < minDist) {
+                minDist = dist;
+                bestIdx = i;
+            }
         }
+        return bestIdx;
     }
 
-    void drawGrid(Mat& img, double S) {
+    void drawDataGridAndStars(Mat& img) {
+        double k = img.cols / 133.0;
+        int markerSize = std::max(4, cvRound(0.5 * k));
+        int thickness = std::max(1, cvRound(0.1 * k));
+
         for (int r = 0; r < 133; ++r) {
             for (int c = 0; c < 133; ++c) {
-                if (isDataCell(r, c)) {
-                    int x1 = cvRound(c * S);
-                    int y1 = cvRound(r * S);
-                    int x2 = cvRound((c + 1) * S);
-                    int y2 = cvRound((r + 1) * S);
-                    rectangle(img, Point(x1, y1), Point(x2, y2), Scalar(200, 200, 200), 1);
+                if (isDataOrHeaderCell(r, c)) {
+                    int x1 = cvRound(c * k);
+                    int y1 = cvRound(r * k);
+                    int x2 = cvRound((c + 1) * k);
+                    int y2 = cvRound((r + 1) * k);
+                    rectangle(img, Point(x1, y1), Point(x2, y2), Scalar(255, 255, 255), 1);
+
+                    int cx = cvRound((c + 0.5) * k);
+                    int cy = cvRound((r + 0.5) * k);
+                    if (cx >= 0 && cx < img.cols && cy >= 0 && cy < img.rows) {
+                        Vec3b px = img.at<Vec3b>(cy, cx);
+                        int bestIdx = getClosestPaletteIndex(px);
+                        Vec3b stdColor = stdColors[bestIdx];
+                        drawMarker(img, Point(cx, cy), stdColor, MARKER_STAR, markerSize, thickness);
+                    }
                 }
             }
         }
     }
 
-    void resizeToTarget(Mat& img) {
-        int L = img.cols;
-        int targetSize = 266;
-        if (L >= 1330) {
-            targetSize = 1330;
+    void drawPaletteMarkers(Mat& img) {
+        double k = img.cols / 133.0;
+        int markerSize = std::max(4, cvRound(0.5 * k));
+        int thickness = std::max(1, cvRound(0.1 * k));
+
+        for (int i = 0; i < 8; ++i) {
+            int cx = cvRound((21.5 + i) * k);
+            int cy = cvRound(6.5 * k);
+            int half = cvRound(0.5 * k);
+
+            rectangle(img, Point(cx - half, cy - half), Point(cx + half, cy + half), Scalar(255, 0, 0), 2);
+            drawMarker(img, Point(cx, cy), stdColors[i], MARKER_STAR, markerSize, thickness);
         }
-        else if (L >= 532) {
-            targetSize = 532;
-        }
-        resize(img, img, Size(targetSize, targetSize), 0, 0, INTER_NEAREST);
     }
 
-    int getBlackArea(const Mat& corner) {
-        return (corner.rows * corner.cols) - countNonZero(corner);
+    int getBlackAreaLocal(const Mat& corner) {
+        Mat bin;
+        threshold(corner, bin, 0, 255, THRESH_BINARY | THRESH_OTSU);
+        return (corner.rows * corner.cols) - countNonZero(bin);
     }
 
     int findLargestChild(int parentIdx, const vector<vector<Point>>& contours, const vector<Vec4i>& hierarchy) {
@@ -185,9 +214,6 @@ namespace ImgParse {
         Mat warped532;
         warpPerspective(gray, warped532, M_Outer, Size(532, 532), INTER_LINEAR);
 
-        Mat binWarped532;
-        threshold(warped532, binWarped532, 0, 255, THRESH_BINARY | THRESH_OTSU);
-
         int cornerSize = 84;
         Rect tl(0, 0, cornerSize, cornerSize);
         Rect tr(532 - cornerSize, 0, cornerSize, cornerSize);
@@ -195,49 +221,52 @@ namespace ImgParse {
         Rect bl(0, 532 - cornerSize, cornerSize, cornerSize);
 
         int areas[4] = {
-            getBlackArea(binWarped532(tl)), getBlackArea(binWarped532(tr)),
-            getBlackArea(binWarped532(br)), getBlackArea(binWarped532(bl))
+            getBlackAreaLocal(warped532(tl)),
+            getBlackAreaLocal(warped532(tr)),
+            getBlackAreaLocal(warped532(br)),
+            getBlackAreaLocal(warped532(bl))
         };
 
         int minArea = areas[0];
         int smallQrIdx = 0;
-        int maxArea = areas[0];
         for (int i = 1; i < 4; ++i) {
             if (areas[i] < minArea) {
                 minArea = areas[i];
                 smallQrIdx = i;
             }
-            if (areas[i] > maxArea) {
-                maxArea = areas[i];
-            }
         }
 
-        if (maxArea == 0 || (double)minArea / maxArea > 0.5) {
+        int maxA = *max_element(areas, areas + 4);
+        if (maxA < minArea * 1.5) {
             return false;
         }
 
-        double len1 = norm(srcPointsOuter[1] - srcPointsOuter[0]);
-        double len2 = norm(srcPointsOuter[3] - srcPointsOuter[0]);
-        double S = std::max(len1, len2) / 133.0;
-        int L = cvRound(133.0 * S);
+        double est_L = std::max(norm(srcPointsOuter[1] - srcPointsOuter[0]), norm(srcPointsOuter[3] - srcPointsOuter[0]));
+        int L_int = cvRound(est_L);
+
+        int targetSize = 266;
+        if (est_L >= 1330) targetSize = 1330;
+        else if (est_L >= 532) targetSize = 532;
 
         vector<Point2f> finalDst;
-        if (smallQrIdx == 0)      finalDst = { Point2f(L,L), Point2f(0.0f,L), Point2f(0.0f,0.0f), Point2f(L,0.0f) };
-        else if (smallQrIdx == 1) finalDst = { Point2f(0.0f,L), Point2f(0.0f,0.0f), Point2f(L,0.0f), Point2f(L,L) };
-        else if (smallQrIdx == 3) finalDst = { Point2f(L,0.0f), Point2f(L,L), Point2f(0.0f,L), Point2f(0.0f,0.0f) };
-        else                      finalDst = { Point2f(0.0f,0.0f), Point2f(L,0.0f), Point2f(L,L), Point2f(0.0f,L) };
+        if (smallQrIdx == 0)      finalDst = { Point2f(L_int,L_int), Point2f(0.0f,L_int), Point2f(0.0f,0.0f), Point2f(L_int,0.0f) };
+        else if (smallQrIdx == 1) finalDst = { Point2f(L_int,0.0f), Point2f(L_int,L_int), Point2f(0.0f,L_int), Point2f(0.0f,0.0f) };
+        else if (smallQrIdx == 3) finalDst = { Point2f(0.0f,L_int), Point2f(0.0f,0.0f), Point2f(L_int,0.0f), Point2f(L_int,L_int) };
+        else                      finalDst = { Point2f(0.0f,0.0f), Point2f(L_int,0.0f), Point2f(L_int,L_int), Point2f(0.0f,L_int) };
 
-        lastValidTransform = getPerspectiveTransform(srcPointsOuter, finalDst);
-        lastValidS = S;
+        Mat M_highres = getPerspectiveTransform(srcPointsOuter, finalDst);
 
-        warpPerspective(srcImg, disImg, lastValidTransform, Size(L, L), INTER_LINEAR);
+        lastValidTransform = M_highres;
+        lastValidL = L_int;
+        lastValidTargetSize = targetSize;
+
+        Mat highResWarped;
+        warpPerspective(srcImg, highResWarped, M_highres, Size(L_int, L_int), INTER_LINEAR);
+        resize(highResWarped, disImg, Size(targetSize, targetSize), 0, 0, INTER_AREA);
 
         extractPalette(disImg);
-        resizeToTarget(disImg);
-
-        double finalS = disImg.cols / 133.0;
-        drawDebug(disImg, finalS);
-        drawGrid(disImg, finalS);
+        drawDataGridAndStars(disImg);
+        drawPaletteMarkers(disImg);
 
         return true;
     }
@@ -372,39 +401,37 @@ namespace ImgParse {
                 foundBR = true;
             }
         }
-
         if (!foundBR) BR = expectedBR;
 
-        Point2f centerTR = TR;
-        Point2f centerBL = BL;
-        Point2f centerTL = TL;
+        double est_L = std::max(len1, len2) / 112.0 * 133.0;
+        int L_int = cvRound(est_L);
+        double k_warp = L_int / 133.0;
 
-        Point2f pCenterOuter(0, 0);
+        int targetSize = 266;
+        if (est_L >= 1330) targetSize = 1330;
+        else if (est_L >= 532) targetSize = 532;
 
-        double S = std::max(norm(centerTR - centerTL), norm(centerBL - centerTL)) / 112.0;
-        int L = cvRound(133.0 * S);
+        vector<Point2f> srcPoints = { TL, TR, BR, BL };
+        vector<Point2f> dstPoints = {
+            Point2f(10.0f * k_warp, 10.0f * k_warp),
+            Point2f(122.0f * k_warp, 10.0f * k_warp),
+            foundBR ? Point2f(126.0f * k_warp, 126.0f * k_warp) : Point2f(122.0f * k_warp, 122.0f * k_warp),
+            Point2f(10.0f * k_warp, 122.0f * k_warp)
+        };
 
-        vector<Point2f> srcPoints = { centerTL, centerTR, BR, centerBL };
+        Mat M_highres = getPerspectiveTransform(srcPoints, dstPoints);
 
-        Point2f dstTL(10.0f * S, 10.0f * S);
-        Point2f dstTR(122.0f * S, 10.0f * S);
-        Point2f dstBL(10.0f * S, 122.0f * S);
-        Point2f dstBR = foundBR ? Point2f(122.0f * S, 122.0f * S) : Point2f(122.0f * S, 122.0f * S);
+        lastValidTransform = M_highres;
+        lastValidL = L_int;
+        lastValidTargetSize = targetSize;
 
-        vector<Point2f> dstPoints = { dstTL, dstTR, dstBR, dstBL };
-
-        Mat transformMatrix = getPerspectiveTransform(srcPoints, dstPoints);
-        lastValidTransform = transformMatrix.clone();
-        lastValidS = S;
-
-        warpPerspective(srcImg, disImg, transformMatrix, Size(L, L), INTER_LINEAR);
+        Mat highResWarped;
+        warpPerspective(srcImg, highResWarped, M_highres, Size(L_int, L_int), INTER_LINEAR);
+        resize(highResWarped, disImg, Size(targetSize, targetSize), 0, 0, INTER_AREA);
 
         extractPalette(disImg);
-        resizeToTarget(disImg);
-
-        double finalS = disImg.cols / 133.0;
-        drawDebug(disImg, finalS);
-        drawGrid(disImg, finalS);
+        drawDataGridAndStars(disImg);
+        drawPaletteMarkers(disImg);
 
         return true;
     }
@@ -424,15 +451,15 @@ namespace ImgParse {
         }
 
         double aspect = (double)srcImg.cols / srcImg.rows;
-        if (aspect > 0.95 && aspect < 1.05 && srcImg.cols > 266) {
-            disImg = srcImg.clone();
+        if (aspect > 0.95 && aspect < 1.05 && srcImg.cols >= 266) {
+            int targetSize = 266;
+            if (srcImg.cols >= 1330) targetSize = 1330;
+            else if (srcImg.cols >= 532) targetSize = 532;
 
+            resize(srcImg, disImg, Size(targetSize, targetSize), 0, 0, INTER_AREA);
             extractPalette(disImg);
-            resizeToTarget(disImg);
-
-            double finalS = disImg.cols / 133.0;
-            drawDebug(disImg, finalS);
-            drawGrid(disImg, finalS);
+            drawDataGridAndStars(disImg);
+            drawPaletteMarkers(disImg);
             return true;
         }
 
@@ -459,15 +486,13 @@ namespace ImgParse {
         }
 
         if (!lastValidTransform.empty()) {
-            int L = cvRound(133.0 * lastValidS);
-            warpPerspective(srcImg, disImg, lastValidTransform, Size(L, L), INTER_LINEAR);
+            Mat highResWarped;
+            warpPerspective(srcImg, highResWarped, lastValidTransform, Size(lastValidL, lastValidL), INTER_LINEAR);
+            resize(highResWarped, disImg, Size(lastValidTargetSize, lastValidTargetSize), 0, 0, INTER_AREA);
 
             extractPalette(disImg);
-            resizeToTarget(disImg);
-
-            double finalS = disImg.cols / 133.0;
-            drawDebug(disImg, finalS);
-            drawGrid(disImg, finalS);
+            drawDataGridAndStars(disImg);
+            drawPaletteMarkers(disImg);
             return true;
         }
 
