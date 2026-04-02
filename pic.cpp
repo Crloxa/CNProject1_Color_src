@@ -8,8 +8,6 @@ namespace ImgParse {
     using namespace std;
     using namespace cv;
 
-    // 静态全局缓存矩阵和最新的调色板
-    //
     static Mat lastValidTransform;
     static double lastValidS = 1.0;
     static Vec3b currentPalette[8];
@@ -19,8 +17,6 @@ namespace ImgParse {
         double area;
     };
 
-    // 数据区判定
-    //
     bool isDataCell(int r, int c) {
         if (r >= 3 && r < 6 && c >= 37 && c < 112) return true;
         if (r == 6 && c >= 29 && c < 112) return true;
@@ -36,8 +32,6 @@ namespace ImgParse {
         return false;
     }
 
-    // 提取并记住调色板
-    //
     void extractPalette(const Mat& croppedImg) {
         if (croppedImg.empty()) return;
         double S = croppedImg.cols / 133.0;
@@ -50,8 +44,6 @@ namespace ImgParse {
         }
     }
 
-    // 绘制调试标识
-    //
     void drawDebug(Mat& img, double S) {
         Point2f tl(10.0 * S, 10.0 * S);
         Point2f tr(122.0 * S, 10.0 * S);
@@ -70,8 +62,6 @@ namespace ImgParse {
         }
     }
 
-    // 绘制数据区网格
-    //
     void drawGrid(Mat& img, double S) {
         for (int r = 0; r < 133; ++r) {
             for (int c = 0; c < 133; ++c) {
@@ -86,8 +76,6 @@ namespace ImgParse {
         }
     }
 
-    // 缩放控制
-    //
     void resizeToTarget(Mat& img) {
         int L = img.cols;
         int targetSize = 266;
@@ -119,8 +107,6 @@ namespace ImgParse {
         return max_idx;
     }
 
-    // 处理V5
-    //
     bool processV5(const Mat& srcImg, Mat& disImg) {
         Mat gray, small_img;
 
@@ -215,11 +201,19 @@ namespace ImgParse {
 
         int minArea = areas[0];
         int smallQrIdx = 0;
+        int maxArea = areas[0];
         for (int i = 1; i < 4; ++i) {
             if (areas[i] < minArea) {
                 minArea = areas[i];
                 smallQrIdx = i;
             }
+            if (areas[i] > maxArea) {
+                maxArea = areas[i];
+            }
+        }
+
+        if (maxArea == 0 || (double)minArea / maxArea > 0.5) {
+            return false;
         }
 
         double len1 = norm(srcPointsOuter[1] - srcPointsOuter[0]);
@@ -229,8 +223,8 @@ namespace ImgParse {
 
         vector<Point2f> finalDst;
         if (smallQrIdx == 0)      finalDst = { Point2f(L,L), Point2f(0.0f,L), Point2f(0.0f,0.0f), Point2f(L,0.0f) };
-        else if (smallQrIdx == 1) finalDst = { Point2f(L,0.0f), Point2f(L,L), Point2f(0.0f,L), Point2f(0.0f,0.0f) };
-        else if (smallQrIdx == 3) finalDst = { Point2f(0.0f,L), Point2f(0.0f,0.0f), Point2f(L,0.0f), Point2f(L,L) };
+        else if (smallQrIdx == 1) finalDst = { Point2f(0.0f,L), Point2f(0.0f,0.0f), Point2f(L,0.0f), Point2f(L,L) };
+        else if (smallQrIdx == 3) finalDst = { Point2f(L,0.0f), Point2f(L,L), Point2f(0.0f,L), Point2f(0.0f,0.0f) };
         else                      finalDst = { Point2f(0.0f,0.0f), Point2f(L,0.0f), Point2f(L,L), Point2f(0.0f,L) };
 
         lastValidTransform = getPerspectiveTransform(srcPointsOuter, finalDst);
@@ -248,8 +242,6 @@ namespace ImgParse {
         return true;
     }
 
-    // 处理V15
-    //
     bool processV15(const Mat& srcImg, Mat& gray, Mat& disImg, bool useHSV) {
         Mat small_img, blurred, binaryForContours;
 
@@ -380,18 +372,26 @@ namespace ImgParse {
                 foundBR = true;
             }
         }
+
         if (!foundBR) BR = expectedBR;
 
-        double S = std::max(len1, len2) / 112.0;
+        Point2f centerTR = TR;
+        Point2f centerBL = BL;
+        Point2f centerTL = TL;
+
+        Point2f pCenterOuter(0, 0);
+
+        double S = std::max(norm(centerTR - centerTL), norm(centerBL - centerTL)) / 112.0;
         int L = cvRound(133.0 * S);
 
-        vector<Point2f> srcPoints = { TL, TR, BR, BL };
-        vector<Point2f> dstPoints = {
-            Point2f(10.0f * S, 10.0f * S),
-            Point2f(122.0f * S, 10.0f * S),
-            foundBR ? Point2f(126.0f * S, 126.0f * S) : Point2f(122.0f * S, 122.0f * S),
-            Point2f(10.0f * S, 122.0f * S)
-        };
+        vector<Point2f> srcPoints = { centerTL, centerTR, BR, centerBL };
+
+        Point2f dstTL(10.0f * S, 10.0f * S);
+        Point2f dstTR(122.0f * S, 10.0f * S);
+        Point2f dstBL(10.0f * S, 122.0f * S);
+        Point2f dstBR = foundBR ? Point2f(122.0f * S, 122.0f * S) : Point2f(122.0f * S, 122.0f * S);
+
+        vector<Point2f> dstPoints = { dstTL, dstTR, dstBR, dstBL };
 
         Mat transformMatrix = getPerspectiveTransform(srcPoints, dstPoints);
         lastValidTransform = transformMatrix.clone();
@@ -409,8 +409,6 @@ namespace ImgParse {
         return true;
     }
 
-    // 主函数入口
-    //
     bool Main(const cv::Mat& srcImg, cv::Mat& disImg) {
         if (srcImg.empty()) return false;
 
@@ -476,4 +474,4 @@ namespace ImgParse {
         return false;
     }
 
-} // namespace ImgParse
+}

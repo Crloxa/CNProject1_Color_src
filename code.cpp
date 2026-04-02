@@ -42,7 +42,7 @@ namespace Code
 	constexpr int HeaderInnerLeft = 0;
 	constexpr int TopDataLeft = HeaderLeft + HeaderWidth;
 	constexpr int TopDataWidth = 75;
-	constexpr int DataAreaCount = 6; 
+	constexpr int DataAreaCount = 6;
 	constexpr int PaddingCellCount = 4;
 
 	struct DataArea
@@ -106,8 +106,8 @@ namespace Code
 	const std::array<DataArea, DataAreaCount> kDataAreas =
 	{ {
 		{3, TopDataLeft, 3, TopDataWidth, 0},
-		{6, 29, 1, 83, 0},       
-		{7, 21, 14, 91, 0},      
+		{6, 29, 1, 83, 0},
+		{7, 21, 14, 91, 0},
 		{21, 3, 88, 127, 0},
 		{109, 3, 3, 127, 0},
 		{112, 21, 18, 91, 0}
