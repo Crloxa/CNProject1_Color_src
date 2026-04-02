@@ -11,17 +11,9 @@
 
 namespace ImageDecode
 {
-	constexpr int MaxDataLength = 10000;
-
 	enum color
 	{
 		Black = 0,
-		Blue = 1,
-		Green = 2,
-		Cyan = 3,
-		Red = 4,
-		Magenta = 5,
-		Yellow = 6,
 		White = 7
 	};
 
@@ -61,174 +53,28 @@ namespace ImageDecode
 	constexpr int BitsPerCell = 3;
 
 	const std::array<DataArea, DataAreaCount> kDataAreas =
-	{{
+	{ {
 		{3, TopDataLeft, 3, TopDataWidth, 0},
 		{6, 21, 15, 91, 0},
 		{21, 3, 88, 127, 0},
 		{109, 3, 3, 127, 0},
 		{112, 21, 18, 91, 0}
-	}};
+	} };
 
+	bool isWhiteCell(const Vec3b& cell)
+	{
+		return cell[0] + cell[1] + cell[2] >= 384;
+	}
 
-static const cv::Vec3b g_standardColors[8] = {
-    cv::Vec3b(0, 0, 0),       // 黑色: 000
-    cv::Vec3b(0, 0, 255),     // 红色: 001
-    cv::Vec3b(0, 255, 0),     // 绿色: 010
-    cv::Vec3b(0, 255, 255),   // 黄色: 011
-    cv::Vec3b(255, 0, 0),     // 蓝色: 100
-    cv::Vec3b(255, 0, 255),   // 品红: 101
-    cv::Vec3b(255, 255, 0),   // 青色: 110
-    cv::Vec3b(255, 255, 255)  // 白色: 111
-};
-
-static int g_colorThreshold = 128;
-static bool g_colorCalibrated = false;
-
-float colorDistance(const cv::Vec3b& color1, const cv::Vec3b& color2) {
-    int db = color1[0] - color2[0];
-    int dg = color1[1] - color2[1];
-    int dr = color1[2] - color2[2];
-    return std::sqrt(db*db + dg*dg + dr*dr);
-}
-
-int findClosestStandardColor(const cv::Vec3b& pixel) {
-    int closestIndex = 0;
-    float minDistance = std::numeric_limits<float>::max();
-    
-    for (int i = 0; i < 8; i++) {
-        float dist = colorDistance(pixel, g_standardColors[i]);
-        if (dist < minDistance) {
-            minDistance = dist;
-            closestIndex = i;
-        }
-    }
-    
-    return closestIndex;
-}
-
-void calibrateColors(cv::Mat& mat) {
-    if (g_colorCalibrated) return;
-    
-    std::vector<cv::Vec3b> standardColors = {
-        cv::Vec3b(0, 0, 0),
-        cv::Vec3b(255, 0, 0),
-        cv::Vec3b(0, 255, 0),
-        cv::Vec3b(0, 255, 255),
-        cv::Vec3b(0, 0, 255),
-        cv::Vec3b(255, 0, 255),
-        cv::Vec3b(255, 255, 0),  
-        cv::Vec3b(255, 255, 255)  
-    };
-    
-    // 网格大小：8x8像素
-	//
-    const int gridSize = 8;
-    const int gridRows = mat.rows / gridSize;
-    const int gridCols = mat.cols / gridSize;
-    
-    // 对每个网格进行统一颜色校准
-	//
-    for (int gridY = 0; gridY < gridRows; gridY++) {
-        for (int gridX = 0; gridX < gridCols; gridX++) {
-            // 计算网格的平均颜色
-			//
-            int startY = gridY * gridSize;
-            int startX = gridX * gridSize;
-            
-            long totalR = 0, totalG = 0, totalB = 0;
-            int pixelCount = 0;
-            
-            for (int y = startY; y < startY + gridSize && y < mat.rows; y++) {
-                for (int x = startX; x < startX + gridSize && x < mat.cols; x++) {
-                    cv::Vec3b pixel = mat.at<cv::Vec3b>(y, x);
-                    totalB += pixel[0];
-                    totalG += pixel[1];
-                    totalR += pixel[2];
-                    pixelCount++;
-                }
-            }
-            
-            if (pixelCount == 0) continue;
-            
-            // 计算平均颜色
-			//
-            cv::Vec3b avgColor(
-                totalB / pixelCount,
-                totalG / pixelCount,
-                totalR / pixelCount
-            );
-            
-            // 以128为阈值，找到最接近的标准颜色
-			//
-            int minDistance = INT_MAX;
-            cv::Vec3b closestColor = avgColor;
-            
-            for (const auto& stdColor : standardColors) {
-                int distance = std::abs(avgColor[0] - stdColor[0]) + 
-                              std::abs(avgColor[1] - stdColor[1]) + 
-                              std::abs(avgColor[2] - stdColor[2]);
-                
-                if (distance < minDistance) {
-                    minDistance = distance;
-                    closestColor = stdColor;
-                }
-            }
-            
-            // 将整个网格统一设置为该标准颜色
-			//
-            for (int y = startY; y < startY + gridSize && y < mat.rows; y++) {
-                for (int x = startX; x < startX + gridSize && x < mat.cols; x++) {
-                    mat.at<cv::Vec3b>(y, x) = closestColor;
-                }
-            }
-        }
-    }
-    
-    std::cout << "Grid-based color calibration completed - each 8x8 grid has uniform color" << std::endl;
-    g_colorCalibrated = true;
-}
-
-bool isWhiteCell(const Vec3b& cell)
-{
-	return cell[0] + cell[1] + cell[2] >= 384;
-}
-
-int readCellValue(const Vec3b& cell)
-{
-	
-	const int b = cell[0];
-	const int g = cell[1];
-	const int r = cell[2];
-	
-	
-	int b_binary = (b >= 128) ? 255 : 0;
-	int g_binary = (g >= 128) ? 255 : 0;
-	int r_binary = (r >= 128) ? 255 : 0;
-	
-	
-	cv::Vec3b binaryColor(b_binary, g_binary, r_binary);
-	
-	
-	int closestColorIndex = findClosestStandardColor(binaryColor);
-	
-	return closestColorIndex;
-}
-
-int readCellValueFromGrid(const Mat& mat, int gridRow, int gridCol)
-{
-	const int gridSize = 8;
-	const int numGrids = 133;
-	
-	int centerX = gridCol * gridSize + gridSize / 2;
-	int centerY = gridRow * gridSize + gridSize / 2;
-	
-	if (centerX >= mat.cols) centerX = mat.cols - 1;
-	if (centerY >= mat.rows) centerY = mat.rows - 1;
-	
-	cv::Vec3b pixel = mat.at<cv::Vec3b>(centerY, centerX);
-	
-	return readCellValue(pixel);
-}
+	int readCellValue(const Vec3b& cell)
+	{
+		const int b = cell[0];
+		const int g = cell[1];
+		const int r = cell[2];
+		return ((b >= 128) ? 4 : 0)
+			| ((g >= 128) ? 2 : 0)
+			| ((r >= 128) ? 1 : 0);
+	}
 
 	bool isInsideCornerQuietZone(int row, int col)
 	{
@@ -237,8 +83,8 @@ int readCellValueFromGrid(const Mat& mat, int gridRow, int gridCol)
 
 	bool isInsideCornerSafetyZone(int row, int col)
 	{
-		const int center = ImageDecode::FrameSize - ImageDecode::SmallQrPointbias;
-		return std::abs(row - center) <= ImageDecode::SmallQrPointRadius + 2 && std::abs(col - center) <= ImageDecode::SmallQrPointRadius + 2;
+		const int center = FrameSize - SmallQrPointbias;
+		return std::abs(row - center) <= SmallQrPointRadius + 2 && std::abs(col - center) <= SmallQrPointRadius + 2;
 	}
 
 	std::vector<CellPos> buildAreaCells(const DataArea& area)
@@ -249,7 +95,7 @@ int readCellValueFromGrid(const Mat& mat, int gridRow, int gridCol)
 			const int rowWidth = area.width - area.trimRight;
 			for (int col = area.left; col < area.left + rowWidth; ++col)
 			{
-				cells.push_back({row, col });
+				cells.push_back({ row, col });
 			}
 		}
 		return cells;
@@ -258,9 +104,9 @@ int readCellValueFromGrid(const Mat& mat, int gridRow, int gridCol)
 	std::vector<CellPos> buildCornerDataCells()
 	{
 		std::vector<CellPos> cells;
-		for (int row = ImageDecode::FrameSize - ImageDecode::CornerReserveSize; row < ImageDecode::FrameSize; ++row)
+		for (int row = FrameSize - CornerReserveSize; row < FrameSize; ++row)
 		{
-			for (int col = ImageDecode::FrameSize - ImageDecode::CornerReserveSize; col < ImageDecode::FrameSize; ++col)
+			for (int col = FrameSize - CornerReserveSize; col < FrameSize; ++col)
 			{
 				if (isInsideCornerQuietZone(row, col))
 				{
@@ -324,25 +170,9 @@ int readCellValueFromGrid(const Mat& mat, int gridRow, int gridCol)
 	}
 
 	uint16_t readHeaderField(const Mat& mat, int fieldId)
-{
-	uint16_t value = 0;
-	const int row = HeaderTop + fieldId;
-	
-	if (mat.rows == 1064 && mat.cols == 1064) {
-		for (int bit = 0; bit < HeaderFieldBits; ++bit)
-		{
-			int gridCol = HeaderLeft + bit;
-			int gridRow = row;
-			
-			if (gridRow >= 0 && gridRow < 133 && gridCol >= 0 && gridCol < 133) {
-				int cellValue = readCellValueFromGrid(mat, gridRow, gridCol);
-				
-				if (cellValue == White) {
-					value |= static_cast<uint16_t>(1u << bit);
-				}
-			}
-		}
-	} else {
+	{
+		uint16_t value = 0;
+		const int row = HeaderTop + fieldId;
 		for (int bit = 0; bit < HeaderFieldBits; ++bit)
 		{
 			if (isWhiteCell(mat.at<Vec3b>(row, HeaderLeft + bit)))
@@ -350,10 +180,8 @@ int readCellValueFromGrid(const Mat& mat, int gridRow, int gridCol)
 				value |= static_cast<uint16_t>(1u << bit);
 			}
 		}
+		return value;
 	}
-	
-	return value;
-}
 
 	FrameType parseFrameType(uint16_t headerValue, bool& isStart, bool& isEnd)
 	{
@@ -380,92 +208,61 @@ int readCellValueFromGrid(const Mat& mat, int gridRow, int gridCol)
 	}
 
 	void readPayload(const Mat& mat, std::vector<unsigned char>& info)
-{
-	const auto cells = buildMergedDataCells();
-	info.assign(ImageDecode::BytesPerFrame, 0);
-	const int totalCells = (ImageDecode::BytesPerFrame * 8 + BitsPerCell - 1) / BitsPerCell;
-	const int mask = (1 << BitsPerCell) - 1;
-	
-	for (int cellIndex = 0;
-		cellIndex < totalCells && cellIndex < static_cast<int>(cells.size());
-		++cellIndex)
 	{
-		const int bitIndex = cellIndex * BitsPerCell;
-		const int byteIndex = bitIndex / 8;
-		const int offset = bitIndex % 8;
-		
-		int value;
-		if (mat.rows == 1064 && mat.cols == 1064) {
-			int gridRow = cells[cellIndex].row;
-			int gridCol = cells[cellIndex].col;
-			value = readCellValueFromGrid(mat, gridRow, gridCol);
-		} else {
-			value = readCellValue(mat.at<Vec3b>(cells[cellIndex].row, cells[cellIndex].col));
-		}
-		
-		info[byteIndex] |= static_cast<unsigned char>((value & mask) << offset);
-		if (offset + BitsPerCell > 8 && byteIndex + 1 < ImageDecode::BytesPerFrame)
+		const auto cells = buildMergedDataCells();
+		info.assign(BytesPerFrame, 0);
+		const int totalCells = (BytesPerFrame * 8 + BitsPerCell - 1) / BitsPerCell;
+		const int mask = (1 << BitsPerCell) - 1;
+		for (int cellIndex = 0;
+			cellIndex < totalCells && cellIndex < static_cast<int>(cells.size());
+			++cellIndex)
 		{
-			info[byteIndex + 1] |= static_cast<unsigned char>(value >> (8 - offset));
+			const int bitIndex = cellIndex * BitsPerCell;
+			const int byteIndex = bitIndex / 8;
+			const int offset = bitIndex % 8;
+			const int value = readCellValue(mat.at<Vec3b>(cells[cellIndex].row, cells[cellIndex].col));
+			info[byteIndex] |= static_cast<unsigned char>((value & mask) << offset);
+			if (offset + BitsPerCell > 8 && byteIndex + 1 < BytesPerFrame)
+			{
+				info[byteIndex + 1] |= static_cast<unsigned char>(value >> (8 - offset));
+			}
 		}
 	}
-}
 
 	bool hasLegalSize(const Mat& mat)
-{
-	return (mat.rows == 1064 && mat.cols == 1064 && mat.type() == CV_8UC3) ||
-	       (mat.rows == ImageDecode::FrameSize && mat.cols == ImageDecode::FrameSize && mat.type() == CV_8UC3);
-}
-
-	bool ImageDecode::Main(Mat& mat, ImageInfo& imageInfo)
-{
-	imageInfo.Info.clear();
-	imageInfo.CheckCode = 0;
-	imageInfo.FrameBase = 0;
-	imageInfo.IsStart = false;
-	imageInfo.IsEnd = false;
-
-	if (!hasLegalSize(mat)) {
-		std::cout << "Image size error: " << mat.rows << "x" << mat.cols << ", type: " << mat.type() << std::endl;
-		return false;
-	}
-	
-	Mat processedMat;
-	if (!ImgParse::Main(mat, processedMat)) {
-		std::cout << "QR code processing failed" << std::endl;
-		return false;
-	}
-
-	calibrateColors(processedMat);
-
-	std::cout << "DEBUG: Image size: " << processedMat.cols << "x" << processedMat.rows << std::endl;
-	std::cout << "DEBUG: Before calling readHeaderField" << std::endl;
-	std::cout.flush();
-
-	const uint16_t headerValue = readHeaderField(processedMat, 0);
-	std::cout << "Header value: " << headerValue << std::endl;
-	
-	parseFrameType(headerValue, imageInfo.IsStart, imageInfo.IsEnd);
-	std::cout << "Frame type - Start: " << imageInfo.IsStart << ", End: " << imageInfo.IsEnd << std::endl;
-	
-	const int codeLenLow = headerValue >> 4;
-	const int codeLen = imageInfo.IsEnd
-		? (codeLenLow | (readTailLenHighBit(processedMat) << 12))
-		: ImageDecode::BytesPerFrame;
-	
-	std::cout << "Calculated data length: " << codeLen << std::endl;
-	
-	if (codeLen > ImageDecode::MaxDataLength)
 	{
-		std::cout << "Data length exceeds limit, skipping frame" << std::endl;
-		return true;
+		return mat.rows == FrameSize && mat.cols == FrameSize && mat.type() == CV_8UC3;
 	}
 
-		imageInfo.CheckCode = readHeaderField(processedMat, 1);
-		imageInfo.FrameBase = readHeaderField(processedMat, 2);
+	bool Main(Mat& mat, ImageInfo& imageInfo)
+	{
+		imageInfo.Info.clear();
+		imageInfo.CheckCode = 0;
+		imageInfo.FrameBase = 0;
+		imageInfo.IsStart = false;
+		imageInfo.IsEnd = false;
+
+		if (!hasLegalSize(mat))
+		{
+			return true;
+		}
+
+		const uint16_t headerValue = readHeaderField(mat, 0);
+		parseFrameType(headerValue, imageInfo.IsStart, imageInfo.IsEnd);
+		const int codeLenLow = headerValue >> 4;
+		const int codeLen = imageInfo.IsEnd
+			? (codeLenLow | (readTailLenHighBit(mat) << 12))
+			: BytesPerFrame;
+		if (codeLen > BytesPerFrame)
+		{
+			return true;
+		}
+
+		imageInfo.CheckCode = readHeaderField(mat, 1);
+		imageInfo.FrameBase = readHeaderField(mat, 2);
 
 		std::vector<unsigned char> payload;
-		readPayload(processedMat, payload);
+		readPayload(mat, payload);
 		payload.resize(codeLen);
 		imageInfo.Info.swap(payload);
 

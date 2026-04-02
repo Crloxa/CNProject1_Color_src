@@ -103,16 +103,16 @@ namespace Code
 	};
 
 	const std::array<DataArea, DataAreaCount> kDataAreas =
-	{{
+	{ {
 		{3, TopDataLeft, 3, TopDataWidth, 0},
 		{6, 21, 15, 91, 0},
 		{21, 3, 88, 127, 0},
 		{109, 3, 3, 127, 0},
 		{112, 21, 18, 91, 0}
-	}};
+	} };
 
 	const std::array<DebugRegion, 10> kDebugRegions =
-	{{
+	{ {
 		{"header", HeaderTop, HeaderLeft, HeaderHeight, HeaderWidth, Vec3b(0, 0, 255)},
 		{"data1", kDataAreas[0].top, kDataAreas[0].left, kDataAreas[0].height, kDataAreas[0].width, Vec3b(255, 0, 0)},
 		{"data1_lower", kDataAreas[1].top, kDataAreas[1].left, kDataAreas[1].height, kDataAreas[1].width, Vec3b(255, 0, 0)},
@@ -123,7 +123,7 @@ namespace Code
 		{"corner_data_h", 112, 121, 9, 9, Vec3b(0, 200, 255)},
 		{"corner", FrameSize - CornerReserveSize, FrameSize - CornerReserveSize, CornerReserveSize, CornerReserveSize, Vec3b(255, 0, 255)},
 		{"small_qr", FrameSize - SmallQrPointbias - SmallQrPointRadius, FrameSize - SmallQrPointbias - SmallQrPointRadius, SmallQrPointRadius * 2 + 1, SmallQrPointRadius * 2 + 1, Vec3b(0, 128, 255)}
-	}};
+	} };
 
 	bool isInsideSmallQrPoint(int row, int col)
 	{
@@ -404,11 +404,11 @@ namespace Code
 	void BulidQrPoint(Mat& mat)
 	{
 		const std::array<std::array<int, 2>, 3> pointPos =
-		{{
+		{ {
 			{0, 0},
 			{0, FrameSize - QrPointSize},
 			{FrameSize - QrPointSize, 0}
-		}};
+		} };
 		const Vec3b vec3bBig[11] =
 		{
 			pixel[Black], pixel[Black], pixel[Black], pixel[Black],
