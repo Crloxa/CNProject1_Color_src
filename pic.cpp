@@ -9,7 +9,6 @@ namespace ImgParse {
     using namespace cv;
 
     static Mat lastValidTransform;
-    static int lastValidL = 133;
     static int lastValidTargetSize = 266;
     static Vec3b currentPalette[8];
 
@@ -27,6 +26,7 @@ namespace ImgParse {
     struct Marker {
         Point2f center;
         double area;
+        int contourIdx;
     };
 
     bool isDataOrHeaderCell(int r, int c) {
@@ -115,10 +115,11 @@ namespace ImgParse {
         }
     }
 
-    int getBlackAreaLocal(const Mat& corner) {
+    int getLocalBlackArea(const Mat& img, Rect r) {
+        Mat crop = img(r);
         Mat bin;
-        threshold(corner, bin, 0, 255, THRESH_BINARY | THRESH_OTSU);
-        return (corner.rows * corner.cols) - countNonZero(bin);
+        threshold(crop, bin, 0, 255, THRESH_BINARY | THRESH_OTSU);
+        return (crop.rows * crop.cols) - countNonZero(bin);
     }
 
     int findLargestChild(int parentIdx, const vector<vector<Point>>& contours, const vector<Vec4i>& hierarchy) {
@@ -205,26 +206,26 @@ namespace ImgParse {
             return atan2(a.y - centerOuter.y, a.x - centerOuter.x) < atan2(b.y - centerOuter.y, b.x - centerOuter.x);
             });
 
-        vector<Point2f> dstPointsOuter = {
+        vector<Point2f> dstPointsTemp = {
             Point2f(0.0f, 0.0f), Point2f(532.0f, 0.0f),
             Point2f(532.0f, 532.0f), Point2f(0.0f, 532.0f)
         };
 
-        Mat M_Outer = getPerspectiveTransform(srcPointsOuter, dstPointsOuter);
-        Mat warped532;
-        warpPerspective(gray, warped532, M_Outer, Size(532, 532), INTER_LINEAR);
+        Mat M_Temp = getPerspectiveTransform(srcPointsOuter, dstPointsTemp);
+        Mat warped532Gray;
+        warpPerspective(gray, warped532Gray, M_Temp, Size(532, 532), INTER_LINEAR);
 
         int cornerSize = 84;
-        Rect tl(0, 0, cornerSize, cornerSize);
-        Rect tr(532 - cornerSize, 0, cornerSize, cornerSize);
-        Rect br(532 - cornerSize, 532 - cornerSize, cornerSize, cornerSize);
-        Rect bl(0, 532 - cornerSize, cornerSize, cornerSize);
+        Rect tl_rect(0, 0, cornerSize, cornerSize);
+        Rect tr_rect(532 - cornerSize, 0, cornerSize, cornerSize);
+        Rect br_rect(532 - cornerSize, 532 - cornerSize, cornerSize, cornerSize);
+        Rect bl_rect(0, 532 - cornerSize, cornerSize, cornerSize);
 
         int areas[4] = {
-            getBlackAreaLocal(warped532(tl)),
-            getBlackAreaLocal(warped532(tr)),
-            getBlackAreaLocal(warped532(br)),
-            getBlackAreaLocal(warped532(bl))
+            getLocalBlackArea(warped532Gray, tl_rect),
+            getLocalBlackArea(warped532Gray, tr_rect),
+            getLocalBlackArea(warped532Gray, br_rect),
+            getLocalBlackArea(warped532Gray, bl_rect)
         };
 
         int minArea = areas[0];
@@ -236,33 +237,21 @@ namespace ImgParse {
             }
         }
 
-        int maxA = *max_element(areas, areas + 4);
-        if (maxA < minArea * 1.5) {
-            return false;
-        }
-
         double est_L = std::max(norm(srcPointsOuter[1] - srcPointsOuter[0]), norm(srcPointsOuter[3] - srcPointsOuter[0]));
-        int L_int = cvRound(est_L);
-
         int targetSize = 266;
         if (est_L >= 1330) targetSize = 1330;
         else if (est_L >= 532) targetSize = 532;
 
         vector<Point2f> finalDst;
-        if (smallQrIdx == 0)      finalDst = { Point2f(L_int,L_int), Point2f(0.0f,L_int), Point2f(0.0f,0.0f), Point2f(L_int,0.0f) };
-        else if (smallQrIdx == 1) finalDst = { Point2f(L_int,0.0f), Point2f(L_int,L_int), Point2f(0.0f,L_int), Point2f(0.0f,0.0f) };
-        else if (smallQrIdx == 3) finalDst = { Point2f(0.0f,L_int), Point2f(0.0f,0.0f), Point2f(L_int,0.0f), Point2f(L_int,L_int) };
-        else                      finalDst = { Point2f(0.0f,0.0f), Point2f(L_int,0.0f), Point2f(L_int,L_int), Point2f(0.0f,L_int) };
+        if (smallQrIdx == 0)      finalDst = { Point2f(targetSize,targetSize), Point2f(0.0f,targetSize), Point2f(0.0f,0.0f), Point2f(targetSize,0.0f) };
+        else if (smallQrIdx == 1) finalDst = { Point2f(targetSize,0.0f), Point2f(targetSize,targetSize), Point2f(0.0f,targetSize), Point2f(0.0f,0.0f) };
+        else if (smallQrIdx == 3) finalDst = { Point2f(0.0f,targetSize), Point2f(0.0f,0.0f), Point2f(targetSize,0.0f), Point2f(targetSize,targetSize) };
+        else                      finalDst = { Point2f(0.0f,0.0f), Point2f(targetSize,0.0f), Point2f(targetSize,targetSize), Point2f(0.0f,targetSize) };
 
-        Mat M_highres = getPerspectiveTransform(srcPointsOuter, finalDst);
-
-        lastValidTransform = M_highres;
-        lastValidL = L_int;
+        lastValidTransform = getPerspectiveTransform(srcPointsOuter, finalDst);
         lastValidTargetSize = targetSize;
 
-        Mat highResWarped;
-        warpPerspective(srcImg, highResWarped, M_highres, Size(L_int, L_int), INTER_LINEAR);
-        resize(highResWarped, disImg, Size(targetSize, targetSize), 0, 0, INTER_AREA);
+        warpPerspective(srcImg, disImg, lastValidTransform, Size(targetSize, targetSize), INTER_LINEAR);
 
         extractPalette(disImg);
         drawDataGridAndStars(disImg);
@@ -302,16 +291,16 @@ namespace ImgParse {
         vector<Marker> markers;
 
         for (size_t i = 0; i < contours.size(); ++i) {
-            int c1 = findLargestChild(i, contours, hierarchy);
+            int c1 = findLargestChild((int)i, contours, hierarchy);
             if (c1 < 0) continue;
             int c2 = findLargestChild(c1, contours, hierarchy);
             if (c2 < 0) continue;
 
             double area0 = contourArea(contours[i]);
+            if (area0 < 15.0 * scale * scale) continue;
+
             double area1 = contourArea(contours[c1]);
             double area2 = contourArea(contours[c2]);
-
-            if (area0 < 15.0 * scale * scale) continue;
 
             double r01 = area0 / max(area1, 1.0);
             double r12 = area1 / max(area2, 1.0);
@@ -321,7 +310,8 @@ namespace ImgParse {
                 if (M.m00 != 0) {
                     markers.push_back({
                         Point2f((M.m10 / M.m00) / scale, (M.m01 / M.m00) / scale),
-                        area0 / (scale * scale)
+                        area0 / (scale * scale),
+                        (int)i
                         });
                 }
             }
@@ -335,6 +325,7 @@ namespace ImgParse {
                     if (m.area > um.area) {
                         um.area = m.area;
                         um.center = m.center;
+                        um.contourIdx = m.contourIdx;
                     }
                     duplicate = true;
                     break;
@@ -379,12 +370,22 @@ namespace ImgParse {
 
         double cross = v1.x * v2.y - v1.y * v2.x;
         Point2f TR, BL;
-        if (cross > 0) { TR = pt1; BL = pt2; }
-        else { TR = pt2; BL = pt1; }
 
-        Point2f BR;
+        if (cross > 0) {
+            TR = pt1;
+            BL = pt2;
+        }
+        else {
+            TR = pt2;
+            BL = pt1;
+        }
+
+        Point2f DirX = (TR - TL) / 112.0f;
+        Point2f DirY = (BL - TL) / 112.0f;
+        Point2f expectedBR = TL + DirX * 115.5f + DirY * 115.5f;
+
         bool foundBR = false;
-        Point2f expectedBR = TR + BL - TL;
+        Point2f BR = expectedBR;
 
         if (markers.size() > 3) {
             double minDist = 1e9;
@@ -396,38 +397,32 @@ namespace ImgParse {
                     bestIdx = i;
                 }
             }
-            if (minDist < max(len1, len2) * 0.5) {
-                BR = markers[bestIdx].center;
+            if (minDist < std::max(len1, len2) * 0.2) {
                 foundBR = true;
+                BR = markers[bestIdx].center;
             }
         }
-        if (!foundBR) BR = expectedBR;
 
         double est_L = std::max(len1, len2) / 112.0 * 133.0;
-        int L_int = cvRound(est_L);
-        double k_warp = L_int / 133.0;
-
         int targetSize = 266;
         if (est_L >= 1330) targetSize = 1330;
         else if (est_L >= 532) targetSize = 532;
 
+        double k = targetSize / 133.0;
+
         vector<Point2f> srcPoints = { TL, TR, BR, BL };
         vector<Point2f> dstPoints = {
-            Point2f(10.0f * k_warp, 10.0f * k_warp),
-            Point2f(122.0f * k_warp, 10.0f * k_warp),
-            foundBR ? Point2f(126.0f * k_warp, 126.0f * k_warp) : Point2f(122.0f * k_warp, 122.0f * k_warp),
-            Point2f(10.0f * k_warp, 122.0f * k_warp)
+            Point2f(10.5f * k, 10.5f * k),
+            Point2f(122.5f * k, 10.5f * k),
+            Point2f(126.0f * k, 126.0f * k),
+            Point2f(10.5f * k, 122.5f * k)
         };
 
-        Mat M_highres = getPerspectiveTransform(srcPoints, dstPoints);
-
-        lastValidTransform = M_highres;
-        lastValidL = L_int;
+        Mat transformMatrix = getPerspectiveTransform(srcPoints, dstPoints);
+        lastValidTransform = transformMatrix.clone();
         lastValidTargetSize = targetSize;
 
-        Mat highResWarped;
-        warpPerspective(srcImg, highResWarped, M_highres, Size(L_int, L_int), INTER_LINEAR);
-        resize(highResWarped, disImg, Size(targetSize, targetSize), 0, 0, INTER_AREA);
+        warpPerspective(srcImg, disImg, transformMatrix, Size(targetSize, targetSize), INTER_LINEAR);
 
         extractPalette(disImg);
         drawDataGridAndStars(disImg);
@@ -456,7 +451,7 @@ namespace ImgParse {
             if (srcImg.cols >= 1330) targetSize = 1330;
             else if (srcImg.cols >= 532) targetSize = 532;
 
-            resize(srcImg, disImg, Size(targetSize, targetSize), 0, 0, INTER_AREA);
+            resize(srcImg, disImg, Size(targetSize, targetSize), 0, 0, INTER_NEAREST);
             extractPalette(disImg);
             drawDataGridAndStars(disImg);
             drawPaletteMarkers(disImg);
@@ -486,9 +481,7 @@ namespace ImgParse {
         }
 
         if (!lastValidTransform.empty()) {
-            Mat highResWarped;
-            warpPerspective(srcImg, highResWarped, lastValidTransform, Size(lastValidL, lastValidL), INTER_LINEAR);
-            resize(highResWarped, disImg, Size(lastValidTargetSize, lastValidTargetSize), 0, 0, INTER_AREA);
+            warpPerspective(srcImg, disImg, lastValidTransform, Size(lastValidTargetSize, lastValidTargetSize), INTER_LINEAR);
 
             extractPalette(disImg);
             drawDataGridAndStars(disImg);
